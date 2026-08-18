@@ -59,7 +59,15 @@ class LoopbackOAuthFlow:
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - stdlib signature
                 pass
 
-        self._server = HTTPServer((self._host, self._port), Handler)
+        try:
+            self._server = HTTPServer((self._host, self._port), Handler)
+        except OSError as exc:
+            raise OAuthFlowError(
+                f"Could not bind the OAuth callback listener on {self._host}:{self._port} ({exc}). "
+                f"Something else is using that port — free it, or change SWIGGY_REDIRECT_URI in .env "
+                f"to a different port (and keep the redirect URI's port in sync with it)."
+            ) from exc
+
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         webbrowser.open(authorization_url)

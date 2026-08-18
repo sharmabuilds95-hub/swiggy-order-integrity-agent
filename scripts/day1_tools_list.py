@@ -18,6 +18,8 @@ from pathlib import Path
 
 import anyio
 
+from mcp.client.auth.exceptions import OAuthFlowError, OAuthRegistrationError, OAuthTokenError
+
 from agent.config import load_settings
 from agent.mcp_client import food_session
 
@@ -50,4 +52,19 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    anyio.run(main)
+    # anyio's TaskGroup wraps failures from concurrent streams in an
+    # ExceptionGroup even for a single, expected error — plain `except`
+    # clauses don't match those. `except*` (PEP 654) unwraps groups at any
+    # nesting depth and also matches a bare exception, so it's the correct
+    # tool here regardless of how deep the failure occurred.
+    try:
+        anyio.run(main)
+    except* (OAuthFlowError, OAuthRegistrationError, OAuthTokenError) as eg:
+        for exc in eg.exceptions:
+            print(f"\nOAuth failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except* RuntimeError as eg:
+        # load_settings()'s missing-env-var error, surfaced cleanly rather than a traceback.
+        for exc in eg.exceptions:
+            print(f"\nConfig error: {exc}", file=sys.stderr)
+        sys.exit(1)

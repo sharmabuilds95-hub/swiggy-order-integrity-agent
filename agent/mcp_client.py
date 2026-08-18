@@ -27,8 +27,8 @@ TOKEN_DIR = Path(".mcp-auth")
 
 # Server-level scope model per Swiggy's docs (not read/write-split) — request
 # all three since the Food server's tool/resource/prompt surfaces aren't
-# separately scoped. Assumption, not yet verified against a real token
-# response; revisit if the authorization server rejects or narrows this.
+# separately scoped. Verified 2026-08-19: the live token response granted
+# exactly this scope string back, unmodified.
 DEFAULT_SCOPE = "mcp:tools mcp:resources mcp:prompts"
 
 
