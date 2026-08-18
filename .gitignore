@@ -1,0 +1,20 @@
+# secrets / tokens — never commit these
+.env
+*.token
+token.json
+tokens/
+.mcp-auth/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# node (mcp-remote's own cache, if it lands locally)
+node_modules/
+
+# os
+.DS_Store
+Thumbs.db
