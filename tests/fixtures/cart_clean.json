@@ -1,0 +1,18 @@
+{
+  "_note": "ANONYMIZED synthetic get_food_cart payload matching the live shape (vault Swiggy-Builders-API-Reference §5c). Safe to commit — no real account data. Matched to actual_order_clean.json so reconcile() returns zero discrepancies.",
+  "statusCode": 0,
+  "statusMessage": "SUCCESS",
+  "addressId": "addr_test_0001",
+  "data": {
+    "cart_id": "cart_test_0001",
+    "result": "SUCCESS",
+    "restaurant": {"name": "Test Kitchen", "deliverySubtitle": "30 mins"},
+    "items": [
+      {"menu_item_id": "1001", "name": "Veg Wrap", "quantity": 1, "subtotal": 150, "total": 160, "final_price": 150, "in_stock": true, "variants": [], "addons": []},
+      {"menu_item_id": "1002", "name": "Paneer Bowl", "quantity": 2, "subtotal": 300, "total": 300, "final_price": 300, "in_stock": true, "variants": [], "addons": []}
+    ],
+    "item_count": 2,
+    "pricing": {"item_total": 450, "delivery_charge": 30, "delivery_charge_strikeoff": 30, "taxes_and_charges": 25, "to_pay": 505},
+    "offers": {"coupon_applied": false, "coupon_discount": 0, "free_delivery_applied": false}
+  }
+}

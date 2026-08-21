@@ -1,0 +1,15 @@
+{
+  "_note": "ANONYMIZED synthetic get_food_orders order matching the live shape (real structure derived from tests/fixtures/real/, but items/restaurant/ids are fictional). Safe to commit. Matched to cart_clean.json: same item ids, quantities, per-line subtotals, and order total => zero discrepancies.",
+  "orderId": "900000000000001",
+  "restaurantId": "77001",
+  "restaurantName": "Test Kitchen",
+  "orderTotal": "₹505",
+  "orderStatus": "Delivered",
+  "orderDeliveryStatus": "delivered",
+  "orderedItems": "Veg Wrap (1),Paneer Bowl (2)",
+  "orderedTime": "August 20, 1:15 PM",
+  "items": [
+    {"itemId": "1001", "name": "Veg Wrap", "isVeg": "1", "quantity": "1", "total": "160", "subtotal": "150", "packingCharges": "10"},
+    {"itemId": "1002", "name": "Paneer Bowl", "isVeg": "1", "quantity": "2", "total": "300", "subtotal": "300", "packingCharges": "0"}
+  ]
+}

@@ -5,6 +5,11 @@ token.json
 tokens/
 .mcp-auth/
 
+# real personal order history — private, used to derive anonymized test
+# fixtures; the raw copy must never hit the public repo (PII: what/when/where
+# the user ordered). Committed fixtures live under tests/fixtures/ anonymized.
+tests/fixtures/real/
+
 # python
 __pycache__/
 *.pyc
