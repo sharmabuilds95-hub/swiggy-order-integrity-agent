@@ -45,10 +45,30 @@ from scripts._errgroup import leaves
 from scripts.day2_happy_path import (
     ORDER_VALUE_CAP,
     HappyPathError,
-    _pick_clean_item,
+    _iter_menu_items,
     _print_addresses,
     _print_cart_summary,
 )
+
+
+def _pick_cheapest_clean_item(categories: list, max_price: int) -> dict | None:
+    """Cheapest in-stock, variant-free item under max_price (prefer no addons).
+
+    Unlike day2's first-match picker, this minimizes item price to give the
+    lowest possible cart total for a deliberately tiny real order.
+    """
+    best: dict | None = None
+    for item in _iter_menu_items(categories):
+        if not item.get("inStock") or item.get("hasVariants"):
+            continue
+        price = item.get("price")
+        if not isinstance(price, (int, float)) or price <= 0 or price >= max_price:
+            continue
+        if best is None or price < best.get("price", 1e9) or (
+            price == best.get("price") and not item.get("hasAddons") and best.get("hasAddons")
+        ):
+            best = item
+    return best
 
 CAPTURED_AT_DEMO = "2026-08-21T12:00:00+05:30"
 SIM_OVERCHARGE = 40.0  # rupees; the labelled simulated overcharge for --simulate
@@ -171,10 +191,13 @@ async def run_place(food: FoodClient, address_id: str, args: argparse.Namespace)
     print(f"-> Restaurant: {rname} (id={rid})")
 
     menu = await food.get_restaurant_menu(address_id, rid, page=1, page_size=8)
-    item = _pick_clean_item(menu.get("categories", []), ORDER_VALUE_CAP)
+    item = _pick_cheapest_clean_item(menu.get("categories", []), ORDER_VALUE_CAP)
     if item is None:
         raise HappyPathError(f"No clean in-stock item under ₹{ORDER_VALUE_CAP} on page 1.")
-    print(f"-> Item: {item.get('name')} (₹{item.get('price')})")
+    print(f"-> Item (cheapest clean): {item.get('name')} (₹{item.get('price')})")
+
+    # Effective budget: the hard ₹400 rail, tightened by an optional --max-to-pay.
+    budget = ORDER_VALUE_CAP if args.max_to_pay is None else min(ORDER_VALUE_CAP, args.max_to_pay)
 
     await food.update_food_cart(
         restaurant_id=rid, address_id=address_id,
@@ -183,12 +206,13 @@ async def run_place(food: FoodClient, address_id: str, args: argparse.Namespace)
     cart = await food.get_food_cart(address_id, restaurant_name=rname)
     to_pay = _print_cart_summary(cart)
 
-    if to_pay is None or to_pay >= ORDER_VALUE_CAP:
-        # Never place above our own rail, regardless of --confirm.
+    if to_pay is None or to_pay >= budget:
+        # Never place above the effective budget (hard ₹400 rail or tighter).
         await food.flush_food_cart()
         raise HappyPathError(
-            f"to_pay ₹{to_pay} is not below the self-imposed ₹{ORDER_VALUE_CAP} cap — "
-            f"refusing to place. Cart flushed."
+            f"Cheapest cart to_pay ₹{to_pay} is not below the ₹{budget} budget "
+            f"(item ₹{item.get('price')} + taxes/delivery/fees) — refusing to place. "
+            f"Cart flushed. Relax --max-to-pay or accept a higher total to proceed."
         )
 
     payment = await food.get_payment_options(address_id)
@@ -198,7 +222,7 @@ async def run_place(food: FoodClient, address_id: str, args: argparse.Namespace)
     print("\n" + "=" * 60)
     print("HUMAN CONFIRMATION GATE — real order placement")
     print(f"  Restaurant: {rname}")
-    print(f"  To pay:     ₹{to_pay}  (< ₹{ORDER_VALUE_CAP} self-imposed cap OK)")
+    print(f"  To pay:     ₹{to_pay}  (< ₹{budget} budget OK; hard rail ₹{ORDER_VALUE_CAP})")
     print(f"  Address:    {address_id}")
     print(f"  Payment:    {method}")
     if args.pay == "upi":
@@ -329,6 +353,7 @@ def main() -> None:
     mode.add_argument("--place", action="store_true", help="Drive a real cart to the placement gate.")
     parser.add_argument("--confirm", action="store_true", help="With --place: actually place the real order.")
     parser.add_argument("--pay", choices=("upi", "cod"), default="upi", help="Payment method for --place (default: upi).")
+    parser.add_argument("--max-to-pay", type=float, default=None, help="Tighter budget: refuse to place if cart to_pay >= this (still capped at ₹400).")
     parser.add_argument("--query", default="rolls", help="Restaurant search query for --place.")
     parser.add_argument("--address-index", type=int, default=0, help="Index into get_addresses (default 0).")
     parser.add_argument("--note", default=None, help="Optional note to restaurant for --place --confirm.")
