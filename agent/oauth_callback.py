@@ -9,6 +9,7 @@ by default). This module is that loopback catcher.
 
 from __future__ import annotations
 
+import functools
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -18,6 +19,12 @@ import anyio
 
 from mcp.client.auth import AuthorizationCodeResult
 from mcp.client.auth.exceptions import OAuthFlowError
+
+# How long to wait for the user to finish login in the browser before giving
+# up. Without this the listener thread is joined with no deadline and hangs
+# forever if the login is never completed (backlog §B; bites at Day-5 demo
+# recording). Five minutes is generous for a phone+OTP round-trip.
+DEFAULT_CALLBACK_TIMEOUT = 300.0
 
 
 class LoopbackOAuthFlow:
@@ -29,10 +36,17 @@ class LoopbackOAuthFlow:
     the one running `serve_forever()` — done here from inside the handler.
     """
 
-    def __init__(self, host: str, port: int, callback_path: str) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        callback_path: str,
+        timeout: float = DEFAULT_CALLBACK_TIMEOUT,
+    ) -> None:
         self._host = host
         self._port = port
         self._callback_path = callback_path
+        self._timeout = timeout
         self._params: dict[str, str] | None = None
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -75,7 +89,20 @@ class LoopbackOAuthFlow:
     async def wait_for_callback(self) -> AuthorizationCodeResult:
         if self._thread is None:
             raise OAuthFlowError("redirect() must be called before wait_for_callback()")
-        await anyio.to_thread.run_sync(self._thread.join)
+        # Bounded join: thread.join(timeout) returns whether or not the callback
+        # arrived, so we check is_alive() afterwards. A plain anyio cancel can't
+        # interrupt a blocking sync join, hence the timeout is pushed into join
+        # itself. On expiry, shut the server down so its thread can exit and the
+        # port is freed rather than leaked.
+        await anyio.to_thread.run_sync(functools.partial(self._thread.join, self._timeout))
+        if self._thread.is_alive():
+            if self._server is not None:
+                threading.Thread(target=self._server.shutdown, daemon=True).start()
+            raise OAuthFlowError(
+                f"Timed out after {self._timeout:.0f}s waiting for the Swiggy login callback "
+                f"— no login was completed. Re-run and finish the browser login, or set a "
+                f"longer timeout."
+            )
 
         params = self._params or {}
         if "error" in params:

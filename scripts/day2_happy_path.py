@@ -33,6 +33,7 @@ from mcp.client.auth.exceptions import OAuthFlowError, OAuthRegistrationError, O
 from agent.config import load_settings
 from agent.food_client import FoodClient, FoodClientError
 from agent.mcp_client import food_session
+from scripts._errgroup import leaves
 
 # Builders Club beta gate: place_food_order rejects a cart valued at ₹1000 or
 # more (verified from its live schema, 2026-08-19). We keep the demo order well
@@ -48,22 +49,6 @@ class HappyPathError(Exception):
     BaseExceptionGroup and prints a full traceback. Raising a plain exception
     that `main()`'s `except*` unwraps keeps expected stops to one clean line.
     """
-
-
-def _leaves(exc: BaseException) -> Iterator[BaseException]:
-    """Flatten a (possibly nested) ExceptionGroup to its leaf exceptions.
-
-    `except*` preserves the group's *nesting* when it splits, so an error
-    raised inside nested anyio task groups (food_session -> http -> session)
-    comes back as a group-of-groups. Printing `eg.exceptions` directly then
-    shows "unhandled errors in a TaskGroup" instead of the real message;
-    recursing to the leaves fixes that.
-    """
-    if isinstance(exc, BaseExceptionGroup):
-        for sub in exc.exceptions:
-            yield from _leaves(sub)
-    else:
-        yield exc
 
 
 def _iter_menu_items(categories: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
@@ -218,19 +203,19 @@ def main() -> None:
     try:
         anyio.run(run, args)
     except* (OAuthFlowError, OAuthRegistrationError, OAuthTokenError) as eg:
-        for exc in _leaves(eg):
+        for exc in leaves(eg):
             print(f"\nOAuth failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except* FoodClientError as eg:
-        for exc in _leaves(eg):
+        for exc in leaves(eg):
             print(f"\nFood tool error: {exc}", file=sys.stderr)
         sys.exit(1)
     except* HappyPathError as eg:
-        for exc in _leaves(eg):
+        for exc in leaves(eg):
             print(f"\n{exc}", file=sys.stderr)
         sys.exit(1)
     except* RuntimeError as eg:
-        for exc in _leaves(eg):
+        for exc in leaves(eg):
             print(f"\nConfig error: {exc}", file=sys.stderr)
         sys.exit(1)
 

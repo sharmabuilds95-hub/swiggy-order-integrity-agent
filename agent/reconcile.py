@@ -184,9 +184,14 @@ def normalize_actual_order(order: dict[str, Any]) -> ActualOrder:
 def _expected_basis(item) -> float | None:
     """Best per-line figure to compare against an order line's `subtotal`.
 
-    Prefer cart `subtotal` (food-only per line, the closest match to order
-    `subtotal`); fall back to the discounted `line_final_price` when the cart
-    omitted a subtotal.
+    Prefer cart `subtotal`, NOT `final_price`. Live probe (2026-08-21): a
+    50%-off item showed cart `subtotal` = 330 (list, price*qty) but
+    `final_price` = 164 (discounted line). The order-history payload records the
+    per-line **list** price in its `subtotal` too and books the discount only at
+    the order-total level (real fixture, order 3: item subtotal 339, orderTotal
+    168). So `subtotal`<->`subtotal` compares list-vs-list and stays silent on a
+    legitimate offer; the discount is caught by the to_pay<->orderTotal check.
+    Fall back to `line_final_price` only when the cart omitted a subtotal.
     """
     return item.subtotal if item.subtotal is not None else item.line_final_price
 

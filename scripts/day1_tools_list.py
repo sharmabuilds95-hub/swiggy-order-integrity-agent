@@ -22,6 +22,7 @@ from mcp.client.auth.exceptions import OAuthFlowError, OAuthRegistrationError, O
 
 from agent.config import load_settings
 from agent.mcp_client import food_session
+from scripts._errgroup import leaves
 
 SNAPSHOT_PATH = Path("tools_snapshot") / "food_tools.json"
 
@@ -60,11 +61,11 @@ if __name__ == "__main__":
     try:
         anyio.run(main)
     except* (OAuthFlowError, OAuthRegistrationError, OAuthTokenError) as eg:
-        for exc in eg.exceptions:
+        for exc in leaves(eg):
             print(f"\nOAuth failed: {exc}", file=sys.stderr)
         sys.exit(1)
     except* RuntimeError as eg:
         # load_settings()'s missing-env-var error, surfaced cleanly rather than a traceback.
-        for exc in eg.exceptions:
+        for exc in leaves(eg):
             print(f"\nConfig error: {exc}", file=sys.stderr)
         sys.exit(1)

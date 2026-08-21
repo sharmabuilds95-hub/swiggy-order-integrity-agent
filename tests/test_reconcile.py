@@ -126,6 +126,42 @@ def test_within_tolerance_is_silent(expected, order):
     assert reconcile(expected, order) == []
 
 
+def test_discounted_item_not_flagged():
+    """A legitimately discounted order must NOT read as a discrepancy.
+
+    Grounded in a live cart probe (2026-08-21): a 50%-off item shows cart
+    subtotal=330 (list, price*qty) but final_price=164 (discounted line), with
+    to_pay built from the discount. The order records the SAME list subtotal
+    (330) and the discount only in orderTotal (216) — exactly the real-fixture
+    pattern (order 3). Comparing subtotal(list)<->subtotal(list) and
+    to_pay<->orderTotal must stay silent, or every offer becomes a false alarm.
+    """
+    cart = {
+        "data": {
+            "restaurant": {"name": "Test Kitchen"},
+            "items": [
+                {"menu_item_id": "2001", "name": "Iced Tea", "quantity": 2,
+                 "subtotal": 330, "total": 330, "final_price": 164}
+            ],
+            "pricing": {"item_total": 164, "delivery_charge": 0, "taxes_and_charges": 52, "to_pay": 216},
+            "offers": {"coupon_applied": False, "coupon_discount": 0, "free_delivery_applied": True},
+        }
+    }
+    expected = build_expectation(cart, captured_at=CAPTURED_AT)
+    order = {
+        "orderId": "900000000000003",
+        "restaurantName": "Test Kitchen",
+        "orderTotal": "₹216",
+        "orderStatus": "Delivered",
+        "orderDeliveryStatus": "delivered",
+        "items": [
+            {"itemId": "2001", "name": "Iced Tea", "quantity": "2",
+             "subtotal": "330", "total": "330", "packingCharges": "0"}
+        ],
+    }
+    assert reconcile(expected, order) == []
+
+
 # --- coupon promised at the gate, missing from the charge -----------------
 def test_coupon_not_applied(cart, order):
     # Cart shows a ₹50 coupon: to_pay drops to 455, but the order is charged 505.
