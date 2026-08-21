@@ -53,6 +53,49 @@ from scripts.day2_happy_path import (
 CAPTURED_AT_DEMO = "2026-08-21T12:00:00+05:30"
 SIM_OVERCHARGE = 40.0  # rupees; the labelled simulated overcharge for --simulate
 
+# UPI payment status polling (check_payment_status long-polls ~19s/call, so a
+# handful of iterations covers a few minutes; a headless client must loop).
+UPI_POLL_MAX_ATTEMPTS = 15
+UPI_TERMINAL_OK = {"SUCCESS", "PAID", "COMPLETED"}
+UPI_TERMINAL_FAIL = {"FAILED", "CANCELLED", "EXPIRED", "DECLINED"}
+
+
+def _first_present(obj: Any, keys: tuple[str, ...]) -> Any:
+    """Depth-first search a nested payload for the first of `keys` (case-insensitive).
+
+    The PENDING_PAYMENT response echoes identifiers (paasId, orderId, cartId,
+    lat, lng) that confirm_order / check_payment_status need, but the exact
+    nesting isn't known until a real placement — so we search rather than assume
+    a path. Returns the value, or None.
+    """
+    wanted = {k.lower() for k in keys}
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k.lower() in wanted and not isinstance(v, (dict, list)):
+                return v
+        for v in obj.values():
+            found = _first_present(v, keys)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _first_present(v, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _summarize_payment_options(po: dict) -> tuple[bool, bool, list[str]]:
+    """Return (upi_available, cod_available, upi_app_names) from get_payment_options."""
+    cod = bool((po.get("cod") or {}).get("available"))
+    upi_apps: list[str] = []
+    for m in po.get("allMethods", []) or []:
+        if str(m.get("groupName", "")).upper() == "UPI" and m.get("enabled"):
+            upi_apps.append(str(m.get("displayName", m.get("id", "?"))))
+    desktop = ((po.get("platforms") or {}).get("desktop") or {}).get("methods", []) or []
+    upi_available = bool(upi_apps) or any(m.get("kind") == "qr" for m in desktop)
+    return upi_available, cod, upi_apps
+
 
 def _expectation_from_actual(actual: ActualOrder, captured_at: str) -> ExpectationRecord:
     """Synthesize a matching expectation from a past order (baseline: clean).
@@ -149,29 +192,113 @@ async def run_place(food: FoodClient, address_id: str, args: argparse.Namespace)
         )
 
     payment = await food.get_payment_options(address_id)
-    print(f"\nPayment options payload keys: {list(payment.keys())}")
+    upi_ok, cod_ok, upi_apps = _summarize_payment_options(payment)
+    method = "UPI" if args.pay == "upi" else "Cash on Delivery"
 
     print("\n" + "=" * 60)
     print("HUMAN CONFIRMATION GATE — real order placement")
     print(f"  Restaurant: {rname}")
     print(f"  To pay:     ₹{to_pay}  (< ₹{ORDER_VALUE_CAP} self-imposed cap OK)")
     print(f"  Address:    {address_id}")
-    print(f"  Payment:    Cash on Delivery")
+    print(f"  Payment:    {method}")
+    if args.pay == "upi":
+        print(f"  UPI apps available: {', '.join(upi_apps) or '(none listed)'}")
+        print(f"  Desktop flow: agent requests a QR; you scan it with your phone's UPI app.")
     print("=" * 60)
+
+    if args.pay == "upi" and not upi_ok:
+        await food.flush_food_cart()
+        raise HappyPathError("UPI not available for this cart/account per get_payment_options. Cart flushed.")
+    if args.pay == "cod" and not cod_ok:
+        await food.flush_food_cart()
+        raise HappyPathError("COD not available for this cart/account per get_payment_options. Cart flushed.")
 
     if not args.confirm:
         await food.flush_food_cart()
         print("\nDry run (no --confirm): cart flushed, nothing placed.")
         return
 
-    # --confirm passed: place the real order (COD). IRREVERSIBLE.
+    if args.pay == "upi":
+        await _place_upi(food, address_id, args)
+    else:
+        await _place_cod(food, address_id, args)
+
+
+async def _place_cod(food: FoodClient, address_id: str, args: argparse.Namespace) -> None:
+    """Place a real COD order. IRREVERSIBLE — reached only past the gate + --confirm."""
     print("\n--confirm set: placing REAL order (Cash on Delivery) ...")
     result = await food.place_food_order(address_id, "Cash", note_to_restaurant=args.note)
     status = str(result.get("status", "")).upper()
     print(f"place_food_order returned status={status or '<none>'}")
     print(json.dumps(result, ensure_ascii=False, indent=1)[:1500])
     if status == "PENDING_PAYMENT":
-        print("\nPENDING_PAYMENT — order NOT yet placed; complete payment, then confirm_order.")
+        print("\nUnexpected PENDING_PAYMENT for COD — order NOT placed. Inspect the payload above.")
+    else:
+        print("\nCOD order placed. Pay cash on delivery.")
+
+
+async def _place_upi(food: FoodClient, address_id: str, args: argparse.Namespace) -> None:
+    """Place a real UPI order via the desktop-QR path, then poll + confirm.
+
+    Flow (per place_food_order's live schema): place with generateUPIQR -> the
+    response is PENDING_PAYMENT and carries a QR + paasId + echo ids. The order
+    is NOT placed until check_payment_status reports SUCCESS and confirm_order
+    then succeeds — this function never claims success before that. NOTE: the
+    post-PENDING_PAYMENT steps are coded against the captured schema and are
+    exercised for the first time by a real order; the echo-field extraction is
+    defensive (`_first_present`) for exactly that reason.
+    """
+    print("\n--confirm set: placing REAL order (UPI, desktop QR) ...")
+    result = await food.place_food_order(address_id, "UPI", generate_upi_qr=True, note_to_restaurant=args.note)
+    status = str(result.get("status", "")).upper()
+    print(f"place_food_order returned status={status or '<none>'}")
+
+    if status != "PENDING_PAYMENT":
+        print(json.dumps(result, ensure_ascii=False, indent=1)[:1500])
+        print("\nExpected PENDING_PAYMENT for UPI but did not get it — NOT claiming placement.")
+        return
+
+    paas_id = _first_present(result, ("paasId", "paas_id"))
+    order_id = _first_present(result, ("orderId", "order_id"))
+    cart_id = _first_present(result, ("cartId", "cart_id"))
+    lat = _first_present(result, ("lat", "latitude"))
+    lng = _first_present(result, ("lng", "longitude"))
+
+    # Surface the QR / UPI link for the user to pay with their phone.
+    qr = _first_present(result, ("qr", "qrString", "qrCode", "upiUri", "intentUrl", "paymentLink", "link"))
+    print("\nPENDING_PAYMENT — order NOT placed yet. Pay in your UPI app:")
+    print(f"  QR/link: {qr if qr else '(not found in top-level fields — see raw payload below)'}")
+    if not qr:
+        print(json.dumps(result, ensure_ascii=False, indent=1)[:2000])
+    print("  (Fallback: the pending order also appears in the Swiggy app to pay there.)")
+
+    if not paas_id:
+        print("\nNo paasId in the response — cannot poll payment status. Inspect payload above.")
+        return
+
+    echo = {"orderId": order_id, "addressId": address_id, "cartId": cart_id, "lat": lat, "lng": lng}
+    echo = {k: v for k, v in echo.items() if v is not None}
+
+    print(f"\nPolling payment status (up to {UPI_POLL_MAX_ATTEMPTS}×, ~19s each) ...")
+    for attempt in range(1, UPI_POLL_MAX_ATTEMPTS + 1):
+        ps = await food.check_payment_status(str(paas_id), **echo)
+        pstatus = str(ps.get("status", "")).upper()
+        print(f"  [{attempt}] status={pstatus or '<none>'}")
+        if pstatus in UPI_TERMINAL_OK:
+            break
+        if pstatus in UPI_TERMINAL_FAIL:
+            print(f"\nPayment {pstatus} — order not placed.")
+            return
+    else:
+        print("\nPayment not confirmed within the polling window — NOT claiming placement.")
+        return
+
+    if not order_id:
+        print("\nPayment succeeded but no orderId to confirm — inspect the Swiggy app.")
+        return
+    confirm = await food.confirm_order(str(order_id), **{k: v for k, v in echo.items() if k != "orderId"})
+    print(f"\nconfirm_order returned: {json.dumps(confirm, ensure_ascii=False)[:800]}")
+    print("Order confirmed — placement complete.")
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -200,7 +327,8 @@ def main() -> None:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--simulate", action="store_true", help="Resolution demo on a real past order (default).")
     mode.add_argument("--place", action="store_true", help="Drive a real cart to the placement gate.")
-    parser.add_argument("--confirm", action="store_true", help="With --place: actually place the real order (COD).")
+    parser.add_argument("--confirm", action="store_true", help="With --place: actually place the real order.")
+    parser.add_argument("--pay", choices=("upi", "cod"), default="upi", help="Payment method for --place (default: upi).")
     parser.add_argument("--query", default="rolls", help="Restaurant search query for --place.")
     parser.add_argument("--address-index", type=int, default=0, help="Index into get_addresses (default 0).")
     parser.add_argument("--note", default=None, help="Optional note to restaurant for --place --confirm.")
