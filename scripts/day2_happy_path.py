@@ -35,10 +35,13 @@ from agent.food_client import FoodClient, FoodClientError
 from agent.mcp_client import food_session
 from scripts._errgroup import leaves
 
-# Builders Club beta gate: place_food_order rejects a cart valued at ₹1000 or
-# more (verified from its live schema, 2026-08-19). We keep the demo order well
-# under it and check the cart against it before the (not-taken) placement step.
-ORDER_VALUE_CAP = 1000
+# Self-imposed safety cap on order value. Swiggy USED to reject placement at
+# >= ₹1000 as a beta guardrail, but on 2026-08-21 that restriction was removed
+# from place_food_order's live schema ("no value ceiling" — verified against the
+# refreshed tools_snapshot). With the platform's guardrail gone, we keep our own
+# hard rail so a miscomputed cart can never place a large real-money order. The
+# gate below checks the cart against it before the (not-taken) placement step.
+ORDER_VALUE_CAP = 400
 
 
 class HappyPathError(Exception):
@@ -170,11 +173,11 @@ async def run(args: argparse.Namespace) -> None:
         print("\n" + "=" * 56)
         print("HUMAN CONFIRMATION GATE — dry run: place_food_order NOT called")
         if to_pay is None:
-            print(f"  Could not read to_pay from cart; ₹{ORDER_VALUE_CAP} gate NOT evaluated.")
+            print(f"  Could not read to_pay from cart; ₹{ORDER_VALUE_CAP} self-imposed cap NOT evaluated.")
         elif to_pay < ORDER_VALUE_CAP:
-            print(f"  to_pay ₹{to_pay} < ₹{ORDER_VALUE_CAP} cap  ->  placement WOULD be allowed.")
+            print(f"  to_pay ₹{to_pay} < ₹{ORDER_VALUE_CAP} self-imposed cap  ->  placement WOULD be allowed.")
         else:
-            print(f"  to_pay ₹{to_pay} >= ₹{ORDER_VALUE_CAP} cap  ->  placement WOULD be rejected by Swiggy.")
+            print(f"  to_pay ₹{to_pay} >= ₹{ORDER_VALUE_CAP} self-imposed cap  ->  placement WOULD be blocked by us (Swiggy no longer caps).")
         print("  Day 4 wires the real placement call in right here, behind explicit confirmation.")
         print("=" * 56)
 

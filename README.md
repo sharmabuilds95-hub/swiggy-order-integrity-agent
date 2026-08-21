@@ -22,7 +22,7 @@ OAuth is Swiggy's standard OAuth 2.1 + PKCE with Dynamic Client Registration —
 ## Hard constraints this project respects
 
 - Never places an order without explicit user confirmation.
-- ₹1000 Builders Club sandbox cap on Food orders.
+- Self-imposed ₹400 cap on any real order this project places. Swiggy previously enforced a ₹1000 beta cap on `place_food_order`, but removed it on 2026-08-21 ("no value ceiling" in the live tool schema); with the platform guardrail gone, we keep our own hard rail so a miscomputed cart can't place a large real-money order.
 - Non-idempotent order-placement calls are never blind-retried — status is checked before any retry.
 - No PII stored beyond session needs.
 
