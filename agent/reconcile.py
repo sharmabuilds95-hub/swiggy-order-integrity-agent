@@ -75,6 +75,7 @@ class ActualOrder:
     """A normalized view of one `get_food_orders` order, ready to reconcile."""
 
     order_id: str
+    restaurant_id: str
     restaurant_name: str
     order_total: float | None
     status: str
@@ -173,6 +174,7 @@ def normalize_actual_order(order: dict[str, Any]) -> ActualOrder:
         )
     return ActualOrder(
         order_id=str(order.get("orderId", "")),
+        restaurant_id=str(order.get("restaurantId", "")),
         restaurant_name=str(order.get("restaurantName", "")),
         order_total=_num(order.get("orderTotal")),
         status=str(order.get("orderStatus", "")),

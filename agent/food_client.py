@@ -1,12 +1,13 @@
-"""Thin typed wrapper over the Food MCP tool surface (ADR-001 Day 2).
+"""Thin typed wrapper over the Food MCP tool surface (ADR-001 Day 2 + Day 4).
 
-Wraps an initialized `mcp.ClientSession` with one coroutine per Food tool used
-on the happy path: address selection -> restaurant search -> menu browse ->
-cart build -> cart read. It is deliberately *incomplete*: `place_food_order`
-is NOT implemented here. Day 2 is a dry run that stops at the human-confirmation
-gate; the order-placement call lands on Day 4, behind a mandatory confirmation
-gate per `00-MASTER-PROMPT` §5. Leaving it out means Day-2 code physically
-cannot place an order, which is a stronger guarantee than a runtime flag.
+Wraps an initialized `mcp.ClientSession` with one coroutine per Food tool the
+build uses: address selection -> restaurant search -> menu browse -> cart build
+-> cart read (Day 2), and the placement/payment/confirm + `report_error` surface
+(Day 4). The Day-4 methods (`place_food_order`, `get_payment_options`,
+`confirm_order`, `check_payment_status`, `report_error`) are the irreversible,
+real-money / outward-facing calls: this wrapper only *issues* them — the
+mandatory human-confirmation gate (`00-MASTER-PROMPT` §5) lives one layer up in
+`scripts/day4_resolution.py`, never inside a wrapper method.
 
 Every method returns the tool's parsed JSON payload, taken from the
 `CallToolResult.structured_content` when the server populates it, otherwise
@@ -118,6 +119,71 @@ class FoodClient:
     async def flush_food_cart(self) -> dict:
         return await self._call("flush_food_cart", {})
 
-    # NOTE: place_food_order is intentionally absent for Day 2 (dry run to the
-    # gate). It arrives on Day 4 with its human-confirmation gate. See module
-    # docstring and ADR-001.
+    # --- order history (read; Day 3/4 reconciliation source) ---------------
+    async def get_food_orders(self, address_id: str) -> dict:
+        return await self._call("get_food_orders", {"addressId": address_id})
+
+    # --- payment / placement / confirm (Day 4) -----------------------------
+    # These are the irreversible, real-money surface. This wrapper only issues
+    # the call; the mandatory human-confirmation gate lives one layer up in the
+    # Day-4 script (00-MASTER-PROMPT §5). A UPI-eligible account must pass a
+    # paymentMethod; "Cash" (COD) is the credential-free path this project uses.
+    async def get_payment_options(self, address_id: str) -> dict:
+        return await self._call("get_payment_options", {"addressId": address_id})
+
+    async def place_food_order(
+        self,
+        address_id: str,
+        payment_method: str,
+        *,
+        intent_app: str | None = None,
+        generate_upi_qr: bool | None = None,
+        note_to_restaurant: str | None = None,
+    ) -> dict:
+        """Place the order. IRREVERSIBLE — only call after explicit confirmation.
+
+        Returns the raw placement payload. For Cash the order is placed directly;
+        for UPI the response carries status="PENDING_PAYMENT" + paasId and the
+        caller must not claim success until check_payment_status -> confirm_order.
+        """
+        args: dict[str, Any] = {"addressId": address_id, "paymentMethod": payment_method}
+        if intent_app is not None:
+            args["intentApp"] = intent_app
+        if generate_upi_qr is not None:
+            args["generateUPIQR"] = generate_upi_qr
+        if note_to_restaurant is not None:
+            args["noteToRestaurant"] = note_to_restaurant
+        return await self._call("place_food_order", args)
+
+    async def check_payment_status(self, paas_id: str, **echo: Any) -> dict:
+        return await self._call("check_payment_status", {"paasId": paas_id, **echo})
+
+    async def confirm_order(self, order_id: str, **echo: Any) -> dict:
+        return await self._call("confirm_order", {"orderId": order_id, **echo})
+
+    # --- resolution / complaint (Day 4) ------------------------------------
+    async def report_error(
+        self,
+        tool: str,
+        error_message: str,
+        *,
+        domain: str | None = None,
+        flow_description: str | None = None,
+        tool_context: dict[str, Any] | None = None,
+        user_notes: str | None = None,
+    ) -> dict:
+        """File an order-integrity report. Returns a pre-filled mailto (vault §5b).
+
+        Outward-facing (logs server-side); only call after explicit user
+        confirmation, and never for a simulated discrepancy.
+        """
+        args: dict[str, Any] = {"tool": tool, "errorMessage": error_message}
+        if domain is not None:
+            args["domain"] = domain
+        if flow_description is not None:
+            args["flowDescription"] = flow_description
+        if tool_context is not None:
+            args["toolContext"] = tool_context
+        if user_notes is not None:
+            args["userNotes"] = user_notes
+        return await self._call("report_error", args)
