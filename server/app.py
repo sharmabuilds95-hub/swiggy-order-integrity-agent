@@ -154,26 +154,40 @@ def _count(n: int) -> str:
     return {0: "no", 1: "one", 2: "two", 3: "three"}.get(n, str(n))
 
 
+def _bearer_gate(inner_app, token: str):
+    """Pure-ASGI bearer gate wrapping the streamable-HTTP app.
+
+    Deliberately NOT a Starlette BaseHTTPMiddleware: that buffers the response
+    body, which breaks the streamable-HTTP / SSE response the MCP transport
+    returns. This wrapper only reads the request headers from the ASGI scope
+    and either short-circuits with 401 or hands the untouched send/receive
+    channels straight through, so the stream is never intercepted.
+    """
+    expected = f"Bearer {token}".encode()
+
+    async def gate(scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            if headers.get(b"authorization") != expected:
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({"type": "http.response.body", "body": b'{"error":"unauthorized"}'})
+                return
+        await inner_app(scope, receive, send)
+
+    return gate
+
+
 def _build_app():
     """Return the streamable-HTTP ASGI app, wrapped with an optional bearer gate."""
     app = server.streamable_http_app()
     token = os.environ.get("MCP_AUTH_TOKEN")
     if not token:
         return app
-
-    from starlette.middleware.base import BaseHTTPMiddleware
-    from starlette.responses import JSONResponse
-
-    class BearerGate(BaseHTTPMiddleware):
-        async def dispatch(self, request, call_next):
-            if request.url.path.rstrip("/").endswith("mcp"):
-                header = request.headers.get("authorization", "")
-                if header != f"Bearer {token}":
-                    return JSONResponse({"error": "unauthorized"}, status_code=401)
-            return await call_next(request)
-
-    app.add_middleware(BearerGate)
-    return app
+    return _bearer_gate(app, token)
 
 
 app = _build_app()
