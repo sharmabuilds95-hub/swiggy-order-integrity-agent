@@ -181,9 +181,29 @@ def _bearer_gate(inner_app, token: str):
     return gate
 
 
+def _transport_security():
+    """Allow the public host we are served under through the SDK's DNS-rebinding
+    guard. That guard allowlists Host headers and defaults to localhost only, so
+    behind a platform proxy (Railway) the public Host is rejected with 421 unless
+    we add it here. PUBLIC_HOST is the bare hostname, e.g.
+    'mcp-server-production-e5e3.up.railway.app'.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    hosts = ["127.0.0.1", "localhost"]
+    public = os.environ.get("PUBLIC_HOST", "").strip()
+    if public:
+        hosts += [public, f"{public}:443", f"{public}:80"]
+    # RAILWAY_PUBLIC_DOMAIN is injected automatically by Railway.
+    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway and railway not in hosts:
+        hosts += [railway, f"{railway}:443"]
+    return TransportSecuritySettings(allowed_hosts=hosts)
+
+
 def _build_app():
     """Return the streamable-HTTP ASGI app, wrapped with an optional bearer gate."""
-    app = server.streamable_http_app()
+    app = server.streamable_http_app(transport_security=_transport_security())
     token = os.environ.get("MCP_AUTH_TOKEN")
     if not token:
         return app
