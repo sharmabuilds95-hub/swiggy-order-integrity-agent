@@ -10,6 +10,11 @@ tokens/
 # the user ordered). Committed fixtures live under tests/fixtures/ anonymized.
 tests/fixtures/real/
 
+# live-run working state — holds REAL order ids, address id, GPS coordinates
+# and UPI transaction data from actual placed orders. Never commit (PII).
+scratchpad/
+server_log.txt
+
 # python
 __pycache__/
 *.pyc
